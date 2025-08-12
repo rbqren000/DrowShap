@@ -6,7 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
  * @class DrawingText
  * @brief 存储单个文本块的属性，包括文本内容、位置和富文本属性。
  */
-@interface DrawingText : NSObject
+@interface DrawingText : NSObject <NSCopying, NSSecureCoding>
 
 @property (nonatomic, copy) NSString *text;
 @property (nonatomic, assign) CGPoint origin;

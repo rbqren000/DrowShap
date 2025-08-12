@@ -1,7 +1,17 @@
 #import <UIKit/UIKit.h>
 #import "DrawingTypes.h"
 
+@class DrawingBoardView;
+
 NS_ASSUME_NONNULL_BEGIN
+
+/**
+ * @protocol DrawingBoardViewDelegate
+ * @brief 委托协议，用于在选中绘图项时通知外部控制器。
+ */
+@protocol DrawingBoardViewDelegate <NSObject>
+- (void)drawingBoardView:(DrawingBoardView *)boardView didSelectItem:(nullable id)item;
+@end
 
 /**
  * @class DrawingBoardView
@@ -12,6 +22,9 @@ NS_ASSUME_NONNULL_BEGIN
  * 绘图工具、颜色、线宽，并管理撤销/重做操作。
  */
 @interface DrawingBoardView : UIView
+
+// 委托
+@property (nonatomic, weak, nullable) id<DrawingBoardViewDelegate> delegate;
 
 // 绘图相关属性
 @property (nonatomic, assign) DrawingToolType currentTool;
@@ -48,10 +61,23 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)clearDrawing;
 
 /**
+ * @brief 还原所有被清空的绘图。
+ */
+- (void)restoreAllDrawing;
+
+/**
  * @brief 获取当前绘制结果的图片。
  * @return 包含背景图和所有绘制内容的 UIImage。
  */
 - (UIImage *)captureDrawing;
+
+/**
+ * @brief 获取与背景图片原始尺寸一致的绘制结果图片。
+ * @discussion 该方法不使用设备屏幕密度进行倍图处理，直接基于背景图片的原始尺寸生成图片，
+ *            确保输出图片尺寸与背景图片完全一致。绘图内容会按比例缩放到原始图片尺寸。
+ * @return 与背景图片尺寸一致的 UIImage，如果没有背景图片则返回 nil。
+ */
+- (UIImage *)captureDrawingWithOriginalSize;
 
 @end
 
