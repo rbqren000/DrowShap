@@ -5,13 +5,14 @@ DrawView是一个功能完整的iOS绘图框架，支持多种绘图工具、图
 ## 模块结构
 
 ```
-DrawView/
-├── DrawingBoardView.h/.m     # 主绘图面板，集成缩放和绘图功能
-├── DrawingView.h/.m          # 核心绘图视图，处理触摸事件和绘图逻辑
-├── DrawingShape.h/.m         # 图形对象模型
-├── DrawingText.h/.m          # 文本对象模型
-├── DrawingTypes.h            # 绘图工具类型定义
-└── README.md                 # 本文档
+DrowShap/
+├── DrawView/
+│   ├── DrawingBoardView.h/.m     # 主绘图面板，集成缩放和绘图功能
+│   ├── DrawingView.h/.m          # 核心绘图视图，处理触摸事件和绘图逻辑
+│   ├── DrawingShape.h/.m         # 图形对象模型
+│   ├── DrawingText.h/.m          # 文本对象模型
+│   └── DrawingTypes.h            # 绘图工具类型定义
+└── README.md                     # 项目文档
 ```
 
 ## 核心组件
