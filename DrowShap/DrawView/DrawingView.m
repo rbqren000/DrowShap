@@ -12,6 +12,9 @@ typedef NS_ENUM(NSInteger, ControlPointPosition) {
     ControlPointPositionBottomRight
 };
 
+// 最小点击区域宽度，用于检测对描边的点击
+static const CGFloat kMinHitTestWidth = 15.0;
+
 @interface DrawingView () <UITextViewDelegate>
 
 // Drawing data
@@ -293,13 +296,17 @@ typedef NS_ENUM(NSInteger, ControlPointPosition) {
 }
 
 - (void)applyLineDashPattern:(nullable NSArray<NSNumber *> *)pattern toPath:(UIBezierPath *)path {
-    if (pattern.count > 0) {
-        NSInteger count = pattern.count;
-        CGFloat dashes[count];
-        for (int i = 0; i < count; i++) {
-            dashes[i] = [pattern[i] floatValue];
+    if (pattern && pattern.count > 0) {
+        size_t count = pattern.count;
+        // 使用 malloc 在堆上分配内存，避免栈溢出
+        CGFloat *dashes = (CGFloat *)malloc(count * sizeof(CGFloat));
+        if (dashes) {
+            for (size_t i = 0; i < count; i++) {
+                dashes[i] = [pattern[i] floatValue];
+            }
+            [path setLineDash:dashes count:count phase:0];
+            free(dashes); // 释放内存
         }
-        [path setLineDash:dashes count:count phase:0];
     } else {
         [path setLineDash:NULL count:0 phase:0];
     }
@@ -454,26 +461,36 @@ typedef NS_ENUM(NSInteger, ControlPointPosition) {
 
 // 私有方法：检查点是否在图形项内
 - (BOOL)isPoint:(CGPoint)point inItem:(id)item {
-    BOOL containsPoint = NO;
-    
     if ([item isKindOfClass:[DrawingShape class]]) {
         DrawingShape *shape = (DrawingShape *)item;
-        // 先检查填充区域（更快）
-        if (shape.fillColor && [shape.path containsPoint:point]) {
-            containsPoint = YES;
-        } else {
-            // 检查路径上的点击（包括描边区域）
-            CGPathRef strokedPath = CGPathCreateCopyByStrokingPath(shape.path.CGPath, NULL, MAX(shape.lineWidth, 15.0), kCGLineCapRound, kCGLineJoinRound, 0);
-            if (strokedPath) {
-                containsPoint = CGPathContainsPoint(strokedPath, NULL, point, NO);
-                CGPathRelease(strokedPath);
-            }
+        
+        // 优化：首先进行快速的包围盒检查，快速排除不相关的图形
+        if (!CGRectContainsPoint(shape.frame, point)) {
+            return NO;
         }
+        
+        // 如果点在包围盒内，再进行精确的路径检查
+        // 1. 检查填充区域（如果存在且点击在内部）
+        if (shape.fillColor && [shape.path containsPoint:point]) {
+            return YES;
+        }
+        
+        // 2. 检查描边区域（这是个昂贵的操作，所以最后执行）
+        CGPathRef strokedPath = CGPathCreateCopyByStrokingPath(shape.path.CGPath, NULL, MAX(shape.lineWidth, kMinHitTestWidth), kCGLineCapRound, kCGLineJoinRound, 0);
+        if (strokedPath) {
+            BOOL contains = CGPathContainsPoint(strokedPath, NULL, point, NO);
+            CGPathRelease(strokedPath);
+            return contains;
+        }
+        
+        return NO;
+        
     } else if ([item isKindOfClass:[DrawingText class]]) {
-        containsPoint = CGRectContainsPoint([(DrawingText *)item boundingRect], point);
+        // 对于文本，直接检查其边界框
+        return CGRectContainsPoint([(DrawingText *)item boundingRect], point);
     }
     
-    return containsPoint;
+    return NO;
 }
 
 // 查找指定点击位置的图案（按照路径精确检测）
@@ -1002,18 +1019,25 @@ typedef NS_ENUM(NSInteger, ControlPointPosition) {
     [self setNeedsDisplay];
 }
 
+- (NSString *)backupFilePath {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths firstObject];
+    return [documentsDirectory stringByAppendingPathComponent:@"drawing_backup.dat"];
+}
+
 - (void)clearDrawing {
-    // 在清空前，将当前状态保存到一个特殊的备份中
     if (self.drawnItems.count > 0) {
         NSArray *backupItems = [self.drawnItems copy];
         NSError *error;
         NSData *backupData = [NSKeyedArchiver archivedDataWithRootObject:backupItems requiringSecureCoding:YES error:&error];
         
         if (backupData && !error) {
-            [[NSUserDefaults standardUserDefaults] setObject:backupData forKey:@"DrawingBackup"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
+            // 将备份写入文件系统，而不是 NSUserDefaults
+            if (![backupData writeToFile:[self backupFilePath] atomically:YES]) {
+                NSLog(@"[DrawingView] Failed to write backup file.");
+            }
         } else {
-            NSLog(@"Failed to backup drawing data: %@", error.localizedDescription);
+            NSLog(@"[DrawingView] Failed to archive drawing data: %@", error.localizedDescription);
         }
     }
     
@@ -1025,43 +1049,41 @@ typedef NS_ENUM(NSInteger, ControlPointPosition) {
 }
 
 - (void)restoreAllDrawing {
-    // 从备份中恢复所有绘图
-    NSData *backupData = [[NSUserDefaults standardUserDefaults] objectForKey:@"DrawingBackup"];
-    if (backupData) {
-        NSError *error;
-        // 扩展允许的类集合，包含所有可能的属性类
-        NSSet *allowedClasses = [NSSet setWithObjects:
-            [NSArray class], [NSMutableArray class],
-            [DrawingShape class], [DrawingText class],
-            [UIBezierPath class], [UIColor class], 
-            [NSString class], [NSDictionary class], [NSMutableDictionary class],
-            [NSNumber class], [UIFont class],
-            nil];
-        
-        NSArray *backupItems = [NSKeyedUnarchiver unarchivedObjectOfClasses:allowedClasses fromData:backupData error:&error];
-        
-        if (backupItems && !error && [backupItems isKindOfClass:[NSArray class]]) {
-            // 将当前状态保存到撤销栈（只有当前有内容时）
-            if (self.drawnItems.count > 0) {
-                NSMutableArray *currentItems = [self.drawnItems mutableCopy];
-                [self.undoStack addObject:@{@"type": @"restore", @"items": currentItems}];
+    NSString *filePath = [self backupFilePath];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    
+    if ([fileManager fileExistsAtPath:filePath]) {
+        NSData *backupData = [NSData dataWithContentsOfFile:filePath];
+        if (backupData) {
+            NSError *error;
+            NSSet *allowedClasses = [NSSet setWithObjects:
+                [NSArray class], [NSMutableArray class],
+                [DrawingShape class], [DrawingText class],
+                [UIBezierPath class], [UIColor class],
+                [NSString class], [NSDictionary class], [NSMutableDictionary class],
+                [NSNumber class], [UIFont class],
+                nil];
+            
+            NSArray *backupItems = [NSKeyedUnarchiver unarchivedObjectOfClasses:allowedClasses fromData:backupData error:&error];
+            
+            if (backupItems && !error && [backupItems isKindOfClass:[NSArray class]]) {
+                if (self.drawnItems.count > 0) {
+                    [self.undoStack addObject:@{@"type": @"restore", @"items": [self.drawnItems mutableCopy]}];
+                }
+                
+                [self.drawnItems removeAllObjects];
+                [self.drawnItems addObjectsFromArray:backupItems];
+                [self.redoStack removeAllObjects];
+                self.selectedItem = nil;
+                [self setNeedsDisplay];
+                
+                // 成功恢复后删除备份文件
+                [fileManager removeItemAtPath:filePath error:nil];
+            } else {
+                NSLog(@"[DrawingView] Failed to unarchive drawing backup: %@", error.localizedDescription);
+                // 如果反序列化失败，删除损坏的备份文件
+                [fileManager removeItemAtPath:filePath error:nil];
             }
-            
-            // 恢复备份的绘图
-            [self.drawnItems removeAllObjects];
-            [self.drawnItems addObjectsFromArray:backupItems];
-            [self.redoStack removeAllObjects];
-            self.selectedItem = nil;
-            [self setNeedsDisplay];
-            
-            // 清除备份，避免重复恢复
-            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"DrawingBackup"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-        } else {
-            // 如果反序列化失败，清除损坏的备份数据
-            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"DrawingBackup"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            NSLog(@"Failed to restore drawing backup: %@", error.localizedDescription);
         }
     }
 }

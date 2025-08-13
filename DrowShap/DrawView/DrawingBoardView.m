@@ -11,6 +11,10 @@
 // contentContainerView 将 imageView 和 drawingView 包裹起来，方便缩放
 @property (nonatomic, strong) UIView *contentContainerView;
 
+// 用于替换 layoutSubviews 中的 static 变量，避免多实例共享状态
+@property (nonatomic, assign) CGSize lastBoundsSize;
+@property (nonatomic, assign) BOOL initialSetupCompleted;
+
 @end
 
 @implementation DrawingBoardView
@@ -59,8 +63,10 @@
     self.drawingView.delegate = self; // 设置委托
     [self.contentContainerView addSubview:self.drawingView];
     
-    // 先设置内部状态，延迟设置UI状态到视图完全加载后
+    // 初始化状态
     _zoomEnabled = NO;
+    _lastBoundsSize = CGSizeZero;
+    _initialSetupCompleted = NO;
 }
 
 #pragma mark - DrawingViewDelegate
@@ -152,19 +158,16 @@
     [super layoutSubviews];
     
     // 只有在视图尺寸发生变化时才更新缩放比例，避免不必要的计算
-    static CGSize lastSize;
-    static BOOL initialSetupDone = NO;
-    
-    if (!CGSizeEqualToSize(self.bounds.size, lastSize)) {
+    if (!CGSizeEqualToSize(self.bounds.size, self.lastBoundsSize)) {
         [self updateMinZoomScaleForSize:self.bounds.size];
-        lastSize = self.bounds.size;
+        self.lastBoundsSize = self.bounds.size;
     }
     
     // 确保在视图完全加载后设置正确的初始状态
-    if (!initialSetupDone && self.scrollView.pinchGestureRecognizer) {
+    if (!self.initialSetupCompleted && self.scrollView.pinchGestureRecognizer) {
         // 现在手势识别器已经准备好，可以安全地设置初始状态
         [self setZoomEnabled:_zoomEnabled];
-        initialSetupDone = YES;
+        self.initialSetupCompleted = YES;
     }
 }
 
@@ -269,7 +272,7 @@
     [self.drawingView restoreAllDrawing];
 }
 
-- (UIImage *)captureDrawing {
+- (UIImage *)captureVisibleAreaAsImage {
     // 确保使用正确的比例进行截图，以保证清晰度
     UIGraphicsBeginImageContextWithOptions(self.contentContainerView.bounds.size, NO, 0.0);
     
@@ -291,6 +294,7 @@
     // 获取背景图片，如果没有背景图片则返回nil
     UIImage *backgroundImage = self.imageView.image;
     if (!backgroundImage || !backgroundImage.CGImage) {
+        NSLog(@"[DrawingBoardView] Capture failed: Background image is nil or has no CGImage.");
         return nil;
     }
     
@@ -308,6 +312,7 @@
     CGColorSpaceRelease(colorSpace);
     
     if (!context) {
+        NSLog(@"[DrawingBoardView] Capture failed: CGBitmapContextCreate returned NULL.");
         return nil;
     }
     
@@ -335,6 +340,7 @@
     CGContextRelease(context);
     
     if (!cgImage) {
+        NSLog(@"[DrawingBoardView] Capture failed: CGBitmapContextCreateImage returned NULL.");
         return nil;
     }
     
@@ -381,13 +387,11 @@
     
     // 设置虚线样式（直接映射到目标尺寸）
     if (shape.lineDashPattern && shape.lineDashPattern.count > 0) {
-        NSInteger count = shape.lineDashPattern.count;
-        // 限制最大数组长度，防止栈溢出
-        NSInteger maxCount = MIN(count, 10);
-        CGFloat dashes[maxCount];
-        for (NSInteger i = 0; i < maxCount; i++) {
-            // 添加数组边界检查
-            if (i < (NSInteger)shape.lineDashPattern.count) {
+        size_t count = shape.lineDashPattern.count;
+        // 动态分配内存以支持任意长度的虚线模式
+        CGFloat *dashes = (CGFloat *)malloc(count * sizeof(CGFloat));
+        if (dashes) {
+            for (size_t i = 0; i < count; i++) {
                 NSNumber *dashValue = shape.lineDashPattern[i];
                 if (dashValue && [dashValue isKindOfClass:[NSNumber class]]) {
                     CGFloat dashLength = [dashValue floatValue];
@@ -396,11 +400,10 @@
                 } else {
                     dashes[i] = 5.0 * scaleX; // 默认值
                 }
-            } else {
-                dashes[i] = 5.0 * scaleX; // 默认值
             }
+            CGContextSetLineDash(context, 0, dashes, count);
+            free(dashes); // 释放内存
         }
-        CGContextSetLineDash(context, 0, dashes, maxCount);
     } else {
         CGContextSetLineDash(context, 0, NULL, 0);
     }
@@ -447,12 +450,13 @@
     // 计算目标尺寸下的文本大小
     CGSize textSize = [text sizeWithAttributes:targetAttributes];
     
-    // 为了修正文字倒立问题，需要再次翻转坐标系
-    // 因为外层已经翻转了坐标系，文字需要再次翻转才能正确显示
+    // 父图形上下文是翻转的（Y 轴朝上）。为了简化文本绘制，我们应用一个局部变换
+    // 来为此操作临时“反翻转”坐标系。这使我们可以在熟悉的自顶向下的坐标空间中绘制文本，
+    // 从而避免在翻转的上下文中进行复杂的基线计算。
     CGContextTranslateCTM(context, 0, targetOrigin.y + textSize.height);
     CGContextScaleCTM(context, 1.0, -1.0);
     
-    // 在修正后的坐标系中绘制文字
+    // 在这个新的局部坐标系中，我们可以定义一个从 y=0 开始的简单绘图矩形。
     CGRect textRect = CGRectMake(targetOrigin.x, 0, textSize.width, textSize.height);
     
     // 使用Core Text进行更精确的文本绘制

@@ -66,10 +66,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)restoreAllDrawing;
 
 /**
- * @brief 获取当前绘制结果的图片。
- * @return 包含背景图和所有绘制内容的 UIImage。
+ * @brief 捕获当前可见区域的图像。
+ * @discussion 此方法截取当前 UIScrollView 中可见部分的内容，并受当前缩放比例影响。
+ * @return 包含背景图和绘制内容的 UIImage。
  */
-- (UIImage *)captureDrawing;
+- (UIImage *)captureVisibleAreaAsImage;
 
 /**
  * @brief 获取与背景图片原始尺寸一致的绘制结果图片。
