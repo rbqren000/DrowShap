@@ -7,11 +7,11 @@ DrawView是一个功能完整的iOS绘图框架，支持多种绘图工具、图
 ```
 DrowShap/
 ├── DrawView/
-│   ├── DrawingBoardView.h/.m     # 主绘图面板，集成缩放和绘图功能
-│   ├── DrawingView.h/.m          # 核心绘图视图，处理触摸事件和绘图逻辑
-│   ├── DrawingShape.h/.m         # 图形对象模型
-│   ├── DrawingText.h/.m          # 文本对象模型
-│   └── DrawingTypes.h            # 绘图工具类型定义
+│   ├── DrawingBoardView.h/.m     # 主绘图面板，集成缩放、绘图和撤销重做功能
+│   ├── DrawingView.h/.m          # 核心绘图视图，处理触摸事件、绘图逻辑和手势交互
+│   ├── DrawingShape.h/.m         # 图形对象模型，支持多种形状（如线条、矩形、圆形）
+│   ├── DrawingText.h/.m          # 文本对象模型，支持富文本和自定义样式
+│   └── DrawingTypes.h            # 绘图工具类型定义，包括画笔、橡皮擦、选择工具等
 └── README.md                     # 项目文档
 ```
 
@@ -28,11 +28,14 @@ DrowShap/
 
 **关键属性：**
 ```objc
+@property (nonatomic, weak, nullable) id<DrawingBoardViewDelegate> delegate; // 委托
 @property (nonatomic, assign) DrawingToolType currentTool;      // 当前绘图工具
 @property (nonatomic, strong) UIColor *strokeColor;            // 描边颜色
-@property (nonatomic, strong) UIColor *fillColor;              // 填充颜色
+@property (nonatomic, strong, nullable) UIColor *fillColor;              // 填充颜色
 @property (nonatomic, assign) CGFloat lineWidth;               // 线宽
-@property (nonatomic, assign) BOOL zoomEnabled;                // 是否启用缩放
+@property (nonatomic, copy, nullable) NSArray<NSNumber *> *lineDashPattern; // 虚线样式
+@property (nonatomic, assign) CGFloat fontSize;                // 字体大小
+@property (nonatomic, assign, getter=isZoomEnabled) BOOL zoomEnabled;                // 是否启用缩放
 ```
 
 **主要方法：**
@@ -49,7 +52,7 @@ DrowShap/
 - (void)restoreAllDrawing;
 
 // 导出绘图结果
-- (UIImage *)captureDrawing;
+- (UIImage *)captureVisibleAreaAsImage;
 - (UIImage *)captureDrawingWithOriginalSize;
 ```
 
@@ -65,10 +68,15 @@ DrowShap/
 **绘图工具支持：**
 - 自由画笔
 - 直线
+- 箭头
+- 文本框
 - 矩形
-- 圆形/椭圆
-- 文本输入
+- 椭圆
+- 正圆形
+- 三角形
+- 及更多其他几何图形...
 - 选择工具
+- 橡皮擦
 
 ### DrawingShape
 图形对象模型，表示各种几何图形。
@@ -83,9 +91,10 @@ DrowShap/
 ```objc
 @property (nonatomic, strong) UIBezierPath *path;              // 图形路径
 @property (nonatomic, strong) UIColor *strokeColor;            // 描边颜色
-@property (nonatomic, strong) UIColor *fillColor;              // 填充颜色
+@property (nonatomic, strong, nullable) UIColor *fillColor;              // 填充颜色
 @property (nonatomic, assign) CGFloat lineWidth;               // 线宽
-@property (nonatomic, copy) NSArray<NSNumber *> *lineDashPattern; // 虚线样式
+@property (nonatomic, copy, nullable) NSArray<NSNumber *> *lineDashPattern; // 虚线样式
+@property (nonatomic, assign) CGRect frame;                    // 图形的边界框
 ```
 
 ### DrawingText
@@ -128,7 +137,7 @@ drawingBoard.currentTool = DrawingToolTypePen;
 drawingBoard.currentTool = DrawingToolTypeRectangle;
 
 // 切换到文本工具
-drawingBoard.currentTool = DrawingToolTypeText;
+drawingBoard.currentTool = DrawingToolTypeTextBox;
 drawingBoard.fontSize = 18.0;
 
 // 启用缩放模式（禁用绘图）
@@ -174,7 +183,7 @@ if (drawingBoard.canRedo) {
 
 ```objc
 // 导出当前显示尺寸的图片
-UIImage *currentImage = [drawingBoard captureDrawing];
+UIImage *currentImage = [drawingBoard captureVisibleAreaAsImage];
 
 // 导出原始尺寸的图片（推荐用于保存）
 UIImage *originalSizeImage = [drawingBoard captureDrawingWithOriginalSize];
@@ -232,27 +241,50 @@ UIImage *newImage = [UIImage imageNamed:@"new_background.jpg"];
 
 ```objc
 typedef NS_ENUM(NSInteger, DrawingToolType) {
-    DrawingToolTypeNone = 0,        // 无工具
-    DrawingToolTypePen,             // 画笔
-    DrawingToolTypeLine,            // 直线
-    DrawingToolTypeRectangle,       // 矩形
-    DrawingToolTypeCircle,          // 圆形
-    DrawingToolTypeText,            // 文本
-    DrawingToolTypeSelect           // 选择工具
+    // 基础绘图工具
+    DrawingToolTypePen,         // 自由画笔
+    DrawingToolTypeLine,        // 直线
+    DrawingToolTypeArrow,       // 箭头
+    DrawingToolTypeTextBox,     // 文本框
+    
+    // 基本几何图形
+    DrawingToolTypeRectangle,   // 矩形
+    DrawingToolTypeOval,        // 椭圆
+    DrawingToolTypeCircle,      // 正圆形
+    DrawingToolTypeTriangle,    // 三角形
+    DrawingToolTypePentagon,    // 五边形
+    DrawingToolTypeTrapezoid,   // 梯形
+    DrawingToolTypeDiamond,     // 菱形
+    DrawingToolTypeStar,        // 五角星
+    
+    // 数学图形
+    DrawingToolTypeSineWave,    // 正弦波
+    DrawingToolTypeCosineWave,  // 余弦波
+    DrawingToolTypeCoordinateSystem, // 直角坐标系
+    
+    // 立体图形
+    DrawingToolTypePyramid,     // 三棱锥
+    DrawingToolTypeCone,        // 圆锥
+    DrawingToolTypeCylinder,    // 圆柱
+    DrawingToolTypeCube,        // 立方体
+    
+    // 操作工具
+    DrawingToolTypeSelector,    // 选择工具
+    DrawingToolTypeEraser,      // 橡皮擦
 };
 ```
 
 ## 注意事项
 
-1. **内存管理**：绘图过程中会创建大量的图形对象，建议在适当时机调用`clearDrawing`清理不需要的绘图数据。
+1. **内存管理**：绘图过程中会创建大量的图形对象，建议在适当时机调用`clearDrawing`清理不需要的绘图数据，避免内存泄漏。
 
-2. **性能优化**：对于大尺寸图片，建议使用`captureDrawingWithOriginalSize`而不是`captureDrawing`来获得更好的性能和质量。
+2. **性能优化**：对于大尺寸图片，建议使用`captureDrawingWithOriginalSize`而不是`captureDrawing`来获得更好的性能和质量。同时，避免频繁的图形重绘操作。
 
-3. **线程安全**：所有UI操作必须在主线程进行，包括绘图操作和图片导出。
+3. **线程安全**：所有UI操作必须在主线程进行，包括绘图操作和图片导出。异步任务中涉及UI更新的部分需通过`dispatch_async(dispatch_get_main_queue(), ^{ ... })`切换回主线程。
 
-4. **坐标系统**：绘图坐标基于UIKit坐标系，原点在左上角。
+4. **坐标系统**：绘图坐标基于UIKit坐标系，原点在左上角。注意坐标转换时需考虑设备分辨率和缩放比例。
 
-5. **缩放限制**：缩放范围自动根据图片尺寸和视图尺寸计算，确保图片始终可见。
+5. **缩放限制**：缩放范围自动根据图片尺寸和视图尺寸计算，确保图片始终可见。可通过`setMinZoomScale:`和`setMaxZoomScale:`自定义缩放范围。
 
 ## 扩展开发
 
